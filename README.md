@@ -5,8 +5,7 @@ CampusQuery AI is an intelligent, agentic college assistant designed to streamli
 Unlike traditional linear RAG pipelines, this project leverages an **agentic workflow** to dynamically evaluate user intent, intelligently route queries, and handle multi-step reasoning to deliver context-aware, reliable answers.
 
 ## 🚀 Live Demo & Code
-* **Live Application:** [Link to your live site]
-* **GitHub Repository:** [Link to your repository]
+* **Live Application:** [https://agenticaiwithlanggraph-wkyx3lhueq7c5yqoqgrqnc.streamlit.app/]
 
 ## 🛠️ Tech Stack
 
@@ -21,5 +20,3 @@ Unlike traditional linear RAG pipelines, this project leverages an **agentic wor
 * **Multi-Step Reasoning:** Moves beyond simple vector searches to handle complex, multi-part institutional questions.
 * **Institutional Knowledge Base:** Optimized for parsing dense academic documents, student manuals, and complex fee structures.
 * **Interactive UI:** A clean, easy-to-use conversational interface built with Streamlit.
-
-## [LIVEURL](https://agenticaiwithlanggraph-wkyx3lhueq7c5yqoqgrqnc.streamlit.app/)
