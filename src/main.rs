@@ -29,11 +29,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::with_config(config);
 
     let initial_user_content = if args.prompt.starts_with('/') {
-        // Extract skill name (the first word following '/')
-        let skill_name = args.prompt[1..]
-            .split_whitespace()
-            .next()
-            .unwrap_or("");
+        let mut tokens = args.prompt[1..].split_whitespace();
+        let skill_name = tokens.next().unwrap_or("");
+        let remaining_args: Vec<&str> = tokens.collect();
 
         let skill_path = format!(".claude/skills/{}/SKILL.md", skill_name);
 
@@ -48,7 +46,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 file_content.trim()
             };
-            body.to_string()
+            let full_args_str = remaining_args.join(" ");
+            let mut substituted_body = body.to_string();
+
+            substituted_body = substituted_body.replace("$ARGUMENTS", &full_args_str);
+
+            for (idx, arg_val) in remaining_args.iter().enumerate() {
+                let target_full = format!("$ARGUMENTS[{}]", idx);
+                let target_short = format!("${}", idx);
+                substituted_body = substituted_body.replace(&target_full, arg_val);
+                substituted_body = substituted_body.replace(&target_short, arg_val);
+            }
+
+            substituted_body
         } else {
             args.prompt
         }
