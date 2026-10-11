@@ -1,7 +1,7 @@
 use async_openai::{config::OpenAIConfig, Client};
 use clap::Parser;
 use serde_json::{json, Value};
-use std::{env, fs, process::{self, Command}};
+use std::{env, fs, path::Path, process::{self, Command}};
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -28,28 +28,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = Client::with_config(config);
 
-    let initial_user_content = if args.prompt.starts_with('/') {
-        let mut tokens = args.prompt[1..].split_whitespace();
-        let skill_name = tokens.next().unwrap_or("");
-        let remaining_args: Vec<&str> = tokens.collect();
+    // Parse tokens from the prompt to extract stacked skills and trailing arguments
+    let mut tokens = args.prompt.split_whitespace().peekable();
+    let mut expanded_skills = Vec::new();
 
-        let skill_path = format!(".claude/skills/{}/SKILL.md", skill_name);
+    while let Some(&token) = tokens.peek() {
+        if token.starts_with('/') {
+            let candidate_skill = &token[1..];
+            let skill_path = format!(".claude/skills/{}/SKILL.md", candidate_skill);
 
-        if let Ok(file_content) = fs::read_to_string(&skill_path) {
-            // Strip frontmatter (content between the first two '---' delimiters)
-            let body = if file_content.starts_with("---") {
-                file_content
-                    .split("---")
-                    .nth(2)
-                    .unwrap_or(&file_content)
-                    .trim()
-            } else {
-                file_content.trim()
-            };
-            let full_args_str = remaining_args.join(" ");
-            let mut substituted_body = body.to_string();
+            // If a valid skill file exists, load its body and consume the token
+            if Path::new(&skill_path).exists() {
+                if let Ok(file_content) = fs::read_to_string(&skill_path) {
+                    let body = if file_content.starts_with("---") {
+                        file_content
+                            .split("---")
+                            .nth(2)
+                            .unwrap_or(&file_content)
+                            .trim()
+                            .to_string()
+                    } else {
+                        file_content.trim().to_string()
+                    };
+                    expanded_skills.push(body);
+                    tokens.next();
+                    continue;
+                }
+            }
+        }
+        // Stop expansion on the first token that is not a valid skill
+        break;
+    }
 
-            substituted_body = substituted_body.replace("$ARGUMENTS", &full_args_str);
+    let remaining_args: Vec<&str> = tokens.collect();
+    let full_args_str = remaining_args.join(" ");
+
+    let mut messages: Vec<Value> = Vec::new();
+
+    if !expanded_skills.is_empty() {
+        // Substitute arguments into each expanded skill body and push as separate user messages
+        for body in expanded_skills {
+            let mut substituted_body = body.replace("$ARGUMENTS", &full_args_str);
 
             for (idx, arg_val) in remaining_args.iter().enumerate() {
                 let target_full = format!("$ARGUMENTS[{}]", idx);
@@ -58,18 +77,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 substituted_body = substituted_body.replace(&target_short, arg_val);
             }
 
-            substituted_body
-        } else {
-            args.prompt
+            messages.push(json!({
+                "role": "user",
+                "content": substituted_body
+            }));
         }
     } else {
-        args.prompt
-    };
-
-    let mut messages = vec![json!({
-        "role": "user",
-        "content": initial_user_content
-    })];
+        messages.push(json!({
+            "role": "user",
+            "content": args.prompt
+        }));
+    }
 
     loop {
         let response: Value = client
