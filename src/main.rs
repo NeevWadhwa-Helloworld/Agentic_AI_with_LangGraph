@@ -28,6 +28,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = Client::with_config(config);
 
+    let mut skill_list_str = String::new();
+    if let Ok(entries) = fs::read_dir(".claude/skills") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let skill_name = path.file_name().unwrap_or_default().to_string_lossy();
+                let skill_md = path.join("SKILL.md");
+                if let Ok(content) = fs::read_to_string(&skill_md) {
+                    // Extract description field from frontmatter
+                    let description = content
+                        .lines()
+                        .find(|line| line.starts_with("description:"))
+                        .map(|line| line.trim_start_matches("description:").trim())
+                        .unwrap_or("");
+
+                    skill_list_str.push_str(&format!("- {}: {}\n", skill_name, description));
+                }
+            }
+        }
+    }
+
+    // Build the system prompt listing all available skills
+    let system_content = format!(
+        "You have access to the following skills:\n\n{}\nIf a skill matches the user's request, call the Skill tool with its name and follow the instructions it returns.",
+        skill_list_str
+    );
+
     // Parse tokens from the prompt to extract stacked skills and trailing arguments
     let mut tokens = args.prompt.split_whitespace().peekable();
     let mut expanded_skills = Vec::new();
