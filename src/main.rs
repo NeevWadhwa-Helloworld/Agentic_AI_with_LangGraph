@@ -27,7 +27,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_api_key(api_key);
 
     let client = Client::with_config(config);
-
     let mut skill_list_str = String::new();
     if let Ok(entries) = fs::read_dir(".claude/skills") {
         for entry in entries.flatten() {
@@ -36,39 +35,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let skill_name = path.file_name().unwrap_or_default().to_string_lossy();
                 let skill_md = path.join("SKILL.md");
                 if let Ok(content) = fs::read_to_string(&skill_md) {
-                    if let Some(frontmatter) = content.split("---").nth(1) {
-                        let mut desc_lines = Vec::new();
-                        let mut capturing_desc = false;
+                    let description = if content.contains("---") {
+                        content
+                            .split("---")
+                            .nth(1)
+                            .unwrap_or("")
+                            .lines()
+                            .find(|line| line.trim().starts_with("description:"))
+                            .map(|line| line.trim().trim_start_matches("description:").trim().trim_matches('"').trim_matches('\''))
+                            .unwrap_or("")
+                            .to_string()
+                    } else {
+                        content
+                            .lines()
+                            .find(|line| line.trim().starts_with("description:"))
+                            .map(|line| line.trim().trim_start_matches("description:").trim().trim_matches('"').trim_matches('\''))
+                            .unwrap_or("")
+                            .to_string()
+                    };
 
-                        for line in frontmatter.lines() {
-                            let trimmed = line.trim();
-                            if trimmed.starts_with("description:") {
-                                capturing_desc = true;
-                                let val = trimmed.trim_start_matches("description:").trim();
-                                if !val.is_empty() {
-                                    desc_lines.push(val.trim_matches('"').trim_matches('\''));
-                                }
-                            } else if capturing_desc {
-                                if trimmed.contains(':') && !trimmed.starts_with('-') {
-                                    break;
-                                }
-                                desc_lines.push(trimmed.trim_matches('"').trim_matches('\''));
-                            }
-                        }
-
-                        let description = desc_lines.join(" ");
-                        if !description.is_empty() {
-                            skill_list_str.push_str(&format!("- {}: {}\n", skill_name, description));
-                        }
-                    }
+                    skill_list_str.push_str(&format!("- {}: {}\n", skill_name, description));
                 }
             }
         }
     }
-
     let system_content = format!(
         "You have access to the following skills:\n\n{}\nIf a skill matches the user's request, call the Skill tool with its name and follow the instructions it returns.",
-        skill_list_str
+        skill_list_str.trim_end()
     );
 
     let mut tokens = args.prompt.split_whitespace().peekable();
