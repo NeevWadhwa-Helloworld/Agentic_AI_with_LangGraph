@@ -27,6 +27,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_api_key(api_key);
 
     let client = Client::with_config(config);
+
+    // Discover available skills from .claude/skills and extract their descriptions
     let mut skill_list_str = String::new();
     if let Ok(entries) = fs::read_dir(".claude/skills") {
         for entry in entries.flatten() {
@@ -35,30 +37,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let skill_name = path.file_name().unwrap_or_default().to_string_lossy();
                 let skill_md = path.join("SKILL.md");
                 if let Ok(content) = fs::read_to_string(&skill_md) {
-                    let description = if content.contains("---") {
-                        content
-                            .split("---")
-                            .nth(1)
-                            .unwrap_or("")
-                            .lines()
-                            .find(|line| line.trim().starts_with("description:"))
-                            .map(|line| line.trim().trim_start_matches("description:").trim().trim_matches('"').trim_matches('\''))
-                            .unwrap_or("")
-                            .to_string()
-                    } else {
-                        content
-                            .lines()
-                            .find(|line| line.trim().starts_with("description:"))
-                            .map(|line| line.trim().trim_start_matches("description:").trim().trim_matches('"').trim_matches('\''))
-                            .unwrap_or("")
-                            .to_string()
-                    };
+                    // Extract full frontmatter section (between the first two '---' delimiters)
+                    if let Some(frontmatter) = content.split("---").nth(1) {
+                        let mut desc_lines = Vec::new();
+                        let mut capturing_desc = false;
 
-                    skill_list_str.push_str(&format!("- {}: {}\n", skill_name, description));
+                        for line in frontmatter.lines() {
+                            let trimmed = line.trim();
+                            if trimmed.starts_with("description:") {
+                                capturing_desc = true;
+                                let val = trimmed.trim_start_matches("description:").trim();
+                                if !val.is_empty() {
+                                    desc_lines.push(val.trim_matches('"').trim_matches('\''));
+                                }
+                            } else if capturing_desc {
+                                if trimmed.contains(':') && !trimmed.starts_with('-') {
+                                    break;
+                                }
+                                desc_lines.push(trimmed.trim_matches('"').trim_matches('\''));
+                            }
+                        }
+
+                        let description = desc_lines.join(" ");
+                        if !description.is_empty() {
+                            skill_list_str.push_str(&format!("- {}: {}\n", skill_name, description));
+                        }
+                    }
                 }
             }
         }
     }
+
+    // Build system prompt strictly instructing skill invocation
     let system_content = format!(
         "You have access to the following skills:\n\n{}\nIf a skill matches the user's request, call the Skill tool with its name and follow the instructions it returns.",
         skill_list_str.trim_end()
@@ -96,7 +106,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let remaining_args: Vec<&str> = tokens.collect();
     let full_args_str = remaining_args.join(" ");
 
-    let mut messages: Vec<Value> = Vec::new();
+    let mut messages: Vec<Value> = vec![json!({
+        "role": "system",
+        "content": system_content
+    })];
 
     if !expanded_skills.is_empty() {
         for body in expanded_skills {
@@ -182,6 +195,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "Skill",
+                            "description": "Load a skill's instructions into the conversation",
+                            "parameters": {
+                                "type": "object",
+                                "required": ["name"],
+                                "properties": {
+                                    "name": {
+                                        "type": "string",
+                                        "description": "The name of the skill to use"
+                                    },
+                                    "args": {
+                                        "type": "string",
+                                        "description": "Optional arguments for the skill"
+                                    }
+                                }
+                            }
+                        }
                     }
                 ]
             }))
@@ -248,6 +282,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             format!("{}{}", stdout, stderr)
                         }
                         Err(err) => format!("Error executing command: {}", err),
+                    };
+
+                    messages.push(json!({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": result_content
+                    }));
+                } else if func_name == "Skill" {
+                    let raw_args = tool_call["function"]["arguments"].as_str().unwrap_or("{}");
+                    let parsed_args: Value = serde_json::from_str(raw_args)?;
+
+                    let skill_name = parsed_args["name"].as_str().unwrap_or("");
+                    let skill_args_str = parsed_args["args"].as_str().unwrap_or("");
+                    let skill_args: Vec<&str> = skill_args_str.split_whitespace().collect();
+
+                    let skill_path = format!(".claude/skills/{}/SKILL.md", skill_name);
+
+                    let result_content = if let Ok(file_content) = fs::read_to_string(&skill_path) {
+                        let body = if file_content.starts_with("---") {
+                            file_content
+                                .split("---")
+                                .nth(2)
+                                .unwrap_or(&file_content)
+                                .trim()
+                        } else {
+                            file_content.trim()
+                        };
+
+                        let mut substituted_body = body.to_string().replace("$ARGUMENTS", skill_args_str);
+
+                        for (idx, arg_val) in skill_args.iter().enumerate() {
+                            let target_full = format!("$ARGUMENTS[{}]", idx);
+                            let target_short = format!("${}", idx);
+                            substituted_body = substituted_body.replace(&target_full, arg_val);
+                            substituted_body = substituted_body.replace(&target_short, arg_val);
+                        }
+
+                        substituted_body
+                    } else {
+                        format!("Skill '{}' not found", skill_name)
                     };
 
                     messages.push(json!({
