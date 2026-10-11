@@ -36,26 +36,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let skill_name = path.file_name().unwrap_or_default().to_string_lossy();
                 let skill_md = path.join("SKILL.md");
                 if let Ok(content) = fs::read_to_string(&skill_md) {
-                    // Extract description field from frontmatter
-                    let description = content
-                        .lines()
-                        .find(|line| line.starts_with("description:"))
-                        .map(|line| line.trim_start_matches("description:").trim())
-                        .unwrap_or("");
+                    if let Some(frontmatter) = content.split("---").nth(1) {
+                        let mut desc_lines = Vec::new();
+                        let mut capturing_desc = false;
 
-                    skill_list_str.push_str(&format!("- {}: {}\n", skill_name, description));
+                        for line in frontmatter.lines() {
+                            let trimmed = line.trim();
+                            if trimmed.starts_with("description:") {
+                                capturing_desc = true;
+                                let val = trimmed.trim_start_matches("description:").trim();
+                                if !val.is_empty() {
+                                    desc_lines.push(val.trim_matches('"').trim_matches('\''));
+                                }
+                            } else if capturing_desc {
+                                if trimmed.contains(':') && !trimmed.starts_with('-') {
+                                    break;
+                                }
+                                desc_lines.push(trimmed.trim_matches('"').trim_matches('\''));
+                            }
+                        }
+
+                        let description = desc_lines.join(" ");
+                        if !description.is_empty() {
+                            skill_list_str.push_str(&format!("- {}: {}\n", skill_name, description));
+                        }
+                    }
                 }
             }
         }
     }
 
-    // Build the system prompt listing all available skills
     let system_content = format!(
         "You have access to the following skills:\n\n{}\nIf a skill matches the user's request, call the Skill tool with its name and follow the instructions it returns.",
         skill_list_str
     );
 
-    // Parse tokens from the prompt to extract stacked skills and trailing arguments
     let mut tokens = args.prompt.split_whitespace().peekable();
     let mut expanded_skills = Vec::new();
 
@@ -64,7 +79,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let candidate_skill = &token[1..];
             let skill_path = format!(".claude/skills/{}/SKILL.md", candidate_skill);
 
-            // If a valid skill file exists, load its body and consume the token
             if Path::new(&skill_path).exists() {
                 if let Ok(file_content) = fs::read_to_string(&skill_path) {
                     let body = if file_content.starts_with("---") {
@@ -83,7 +97,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        // Stop expansion on the first token that is not a valid skill
         break;
     }
 
@@ -93,7 +106,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut messages: Vec<Value> = Vec::new();
 
     if !expanded_skills.is_empty() {
-        // Substitute arguments into each expanded skill body and push as separate user messages
         for body in expanded_skills {
             let mut substituted_body = body.replace("$ARGUMENTS", &full_args_str);
 
