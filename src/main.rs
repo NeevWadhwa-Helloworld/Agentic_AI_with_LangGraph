@@ -58,6 +58,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 "required": ["file_path"]
                             }
                         }
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "Write",
+                            "description": "Write content to a file",
+                            "parameters": {
+                                "type": "object",
+                                "required": ["file_path", "content"],
+                                "properties": {
+                                    "file_path": {
+                                        "type": "string",
+                                        "description": "The path of the file to write to"
+                                    },
+                                    "content": {
+                                        "type": "string",
+                                        "description": "The content to write to the file"
+                                    }
+                                }
+                            }
+                        }
                     }
                 ]
             }))
@@ -94,6 +115,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
 
                     // CHANGED: Append tool execution result back into conversation history
+                    messages.push(json!({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": result_content
+                    }));
+                }else if func_name == "Write" {
+                    let raw_args = tool_call["function"]["arguments"].as_str().unwrap_or("{}");
+                    let parsed_args: Value = serde_json::from_str(raw_args)?;
+
+                    let file_path = parsed_args["file_path"].as_str().unwrap_or("");
+                    let content_to_write = parsed_args["content"].as_str().unwrap_or("");
+
+                    // NEW: Write content to specified file path (creates or overwrites)
+                    let result_content = match fs::write(file_path, content_to_write) {
+                        Ok(_) => "Successfully written to file".to_string(),
+                        Err(err) => format!("Error writing file: {}", err),
+                    };
+
+                    // NEW: Append write tool execution result to message history
                     messages.push(json!({
                         "role": "tool",
                         "tool_call_id": tool_call_id,
