@@ -28,9 +28,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = Client::with_config(config);
 
+    let initial_user_content = if args.prompt.starts_with('/') {
+        // Extract skill name (the first word following '/')
+        let skill_name = args.prompt[1..]
+            .split_whitespace()
+            .next()
+            .unwrap_or("");
+
+        let skill_path = format!(".claude/skills/{}/SKILL.md", skill_name);
+
+        if let Ok(file_content) = fs::read_to_string(&skill_path) {
+            // Strip frontmatter (content between the first two '---' delimiters)
+            let body = if file_content.starts_with("---") {
+                file_content
+                    .split("---")
+                    .nth(2)
+                    .unwrap_or(&file_content)
+                    .trim()
+            } else {
+                file_content.trim()
+            };
+            body.to_string()
+        } else {
+            args.prompt
+        }
+    } else {
+        args.prompt
+    };
+
     let mut messages = vec![json!({
         "role": "user",
-        "content": args.prompt
+        "content": initial_user_content
     })];
 
     loop {
