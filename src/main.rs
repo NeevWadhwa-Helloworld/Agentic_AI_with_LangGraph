@@ -1,7 +1,7 @@
-use async_openai::{Client, config::OpenAIConfig};
+use async_openai::{config::OpenAIConfig, Client};
 use clap::Parser;
-use serde_json::{Value, json};
-use std::{env,fs, process};
+use serde_json::{json, Value};
+use std::{env, fs, process};
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -28,55 +28,86 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = Client::with_config(config);
 
-    #[allow(unused_variables)]
-    let response: Value = client
-        .chat()
-        .create_byot(json!({
-            "messages": [
-                {
-                    "role": "user",
-                    "content": args.prompt
-                }
-            ],
-            "model": "anthropic/claude-haiku-4.5",
-            "tools":[
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "Read",
-                        "description": "Read and return the contents of a file",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "file_path": {
-                                    "type": "string",
-                                    "description": "The path to the file to read"
-                                }
-                            },
-                            "required": ["file_path"]
+    // CHANGED: Maintain conversation history in a persistent vector
+    let mut messages = vec![json!({
+        "role": "user",
+        "content": args.prompt
+    })];
+
+    // CHANGED: Enter the agent loop
+    loop {
+        let response: Value = client
+            .chat()
+            .create_byot(json!({
+                "messages": messages, // CHANGED: Pass the full conversation history
+                "model": "anthropic/claude-haiku-4.5",
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "Read",
+                            "description": "Read and return the contents of a file",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "file_path": {
+                                        "type": "string",
+                                        "description": "The path to the file to read"
+                                    }
+                                },
+                                "required": ["file_path"]
+                            }
                         }
                     }
+                ]
+            }))
+            .await?;
+
+        let message = &response["choices"][0]["message"];
+
+        // CHANGED: Append the assistant's response to conversation history
+        messages.push(message.clone());
+
+        // CHANGED: Check for tool calls
+        if let Some(tool_calls) = message["tool_calls"].as_array() {
+            if tool_calls.is_empty() {
+                // If tool_calls array is empty, print content and break
+                if let Some(content) = message["content"].as_str() {
+                    println!("{}", content);
                 }
-            ]
-        }))
-        .await?;
+                break;
+            }
 
-    let message = &response["choices"][0]["message"];
+            // Iterate through each tool call and process execution
+            for tool_call in tool_calls {
+                let tool_call_id = tool_call["id"].as_str().unwrap_or_default();
+                let func_name = tool_call["function"]["name"].as_str().unwrap_or_default();
 
-    if let Some(tool_calls) = message["tool_calls"].as_array() {
-        if let Some(first_call) = tool_calls.first() {
-            let func_name = first_call["function"]["name"].as_str().unwrap_or_default();
-            if func_name == "Read" {
-                let raw_args = first_call["function"]["arguments"].as_str().unwrap_or("{}");
-                let parsed_args: Value = serde_json::from_str(raw_args)?;
-                if let Some(file_path) = parsed_args["file_path"].as_str() {
-                    let contents = fs::read_to_string(file_path)?;
-                    print!("{}", contents);
+                if func_name == "Read" {
+                    let raw_args = tool_call["function"]["arguments"].as_str().unwrap_or("{}");
+                    let parsed_args: Value = serde_json::from_str(raw_args)?;
+                    
+                    let file_path = parsed_args["file_path"].as_str().unwrap_or("");
+                    let result_content = match fs::read_to_string(file_path) {
+                        Ok(contents) => contents,
+                        Err(err) => format!("Error reading file: {}", err),
+                    };
+
+                    // CHANGED: Append tool execution result back into conversation history
+                    messages.push(json!({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": result_content
+                    }));
                 }
             }
+        } else {
+            // CHANGED: Terminal state — print final response content and exit loop
+            if let Some(content) = message["content"].as_str() {
+                println!("{}", content);
+            }
+            break;
         }
-    } else if let Some(content) = message["content"].as_str() {
-        println!("{}", content);
     }
 
     Ok(())
