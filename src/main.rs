@@ -79,6 +79,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "Bash",
+                            "description": "Execute a shell command",
+                            "parameters": {
+                                "type": "object",
+                                "required": ["command"],
+                                "properties": {
+                                    "command": {
+                                        "type": "string",
+                                        "description": "The command to execute"
+                                    }
+                                }
+                            }
+                        }
                     }
                 ]
             }))
@@ -140,7 +157,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "content": result_content
                     }));
                 }
-            }
+            }else if func_name == "Bash" {
+                    let raw_args = tool_call["function"]["arguments"].as_str().unwrap_or("{}");
+                    let parsed_args: Value = serde_json::from_str(raw_args)?;
+
+                    let command_str = parsed_args["command"].as_str().unwrap_or("");
+
+                    let result_content = match Command::new("sh").arg("-c").arg(command_str).output() {
+                        Ok(output) => {
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            format!("{}{}", stdout, stderr)
+                        }
+                        Err(err) => format!("Error executing command: {}", err),
+                    };
+
+                    messages.push(json!({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": result_content
+                    }));
+                }
         } else {
             // CHANGED: Terminal state — print final response content and exit loop
             if let Some(content) = message["content"].as_str() {
