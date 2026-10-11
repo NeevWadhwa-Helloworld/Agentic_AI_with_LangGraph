@@ -1,7 +1,7 @@
 use async_openai::{config::OpenAIConfig, Client};
 use clap::Parser;
 use serde_json::{json, Value};
-use std::{env, fs, process};
+use std::{env, fs, process::{self, Command}};
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -28,18 +28,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = Client::with_config(config);
 
-    // CHANGED: Maintain conversation history in a persistent vector
     let mut messages = vec![json!({
         "role": "user",
         "content": args.prompt
     })];
 
-    // CHANGED: Enter the agent loop
     loop {
         let response: Value = client
             .chat()
             .create_byot(json!({
-                "messages": messages, // CHANGED: Pass the full conversation history
+                "messages": messages,
                 "model": "anthropic/claude-haiku-4.5",
                 "tools": [
                     {
@@ -103,20 +101,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let message = &response["choices"][0]["message"];
 
-        // CHANGED: Append the assistant's response to conversation history
         messages.push(message.clone());
 
-        // CHANGED: Check for tool calls
         if let Some(tool_calls) = message["tool_calls"].as_array() {
             if tool_calls.is_empty() {
-                // If tool_calls array is empty, print content and break
                 if let Some(content) = message["content"].as_str() {
                     println!("{}", content);
                 }
                 break;
             }
 
-            // Iterate through each tool call and process execution
             for tool_call in tool_calls {
                 let tool_call_id = tool_call["id"].as_str().unwrap_or_default();
                 let func_name = tool_call["function"]["name"].as_str().unwrap_or_default();
@@ -131,33 +125,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Err(err) => format!("Error reading file: {}", err),
                     };
 
-                    // CHANGED: Append tool execution result back into conversation history
                     messages.push(json!({
                         "role": "tool",
                         "tool_call_id": tool_call_id,
                         "content": result_content
                     }));
-                }else if func_name == "Write" {
+                } else if func_name == "Write" {
                     let raw_args = tool_call["function"]["arguments"].as_str().unwrap_or("{}");
                     let parsed_args: Value = serde_json::from_str(raw_args)?;
 
                     let file_path = parsed_args["file_path"].as_str().unwrap_or("");
                     let content_to_write = parsed_args["content"].as_str().unwrap_or("");
 
-                    // NEW: Write content to specified file path (creates or overwrites)
                     let result_content = match fs::write(file_path, content_to_write) {
                         Ok(_) => "Successfully written to file".to_string(),
                         Err(err) => format!("Error writing file: {}", err),
                     };
 
-                    // NEW: Append write tool execution result to message history
                     messages.push(json!({
                         "role": "tool",
                         "tool_call_id": tool_call_id,
                         "content": result_content
                     }));
-                }
-            }else if func_name == "Bash" {
+                } else if func_name == "Bash" {
                     let raw_args = tool_call["function"]["arguments"].as_str().unwrap_or("{}");
                     let parsed_args: Value = serde_json::from_str(raw_args)?;
 
@@ -178,8 +168,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "content": result_content
                     }));
                 }
+            }
         } else {
-            // CHANGED: Terminal state — print final response content and exit loop
             if let Some(content) = message["content"].as_str() {
                 println!("{}", content);
             }
