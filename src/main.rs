@@ -1,7 +1,7 @@
 use async_openai::{Client, config::OpenAIConfig};
 use clap::Parser;
 use serde_json::{Value, json};
-use std::{env, process};
+use std::{env,fs, process};
 
 #[derive(Parser)]
 #[command(author, version, about)]
